@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flower-server
+  namespace: fedprox
+  labels:
+    app: flower-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flower-server
+  template:
+    metadata:
+      labels:
+        app: flower-server
+    spec:
+      containers:
+        - name: fluentd-sidecar
+          image: fluentd
+          resources:
+            requests:
+              memory: "100Mi"
+              cpu: "100m"
+            limits:
+              memory: "500Mi"
+              cpu: "500m"
+          env:
+            - name: FLUENTD_CONF
+              value: "relayer.conf"
+          volumeMounts:
+            - name: fluentd-cfg
+              mountPath: "/fluentd/etc/"
+              readOnly: true
+            - name: log-path
+              mountPath: "/var/log"
+        - name: kubeflower
+          image: registry.ican/kubeflower:v3.1
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: "500m"
+              memory: "1Gi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          command:
+            - /bin/sh
+            - -c
+            - python /app/src/server.py --clients 5 --min 5 --rounds 50 >> /var/log/app.log
+          volumeMounts:
+            - name: log-path
+              mountPath: "/var/log"
+          ports:
+            - containerPort: 8080
+      initContainers:
+        - name: init-create-file
+          image: busybox
+          command: [
+              "sh",
+              "-c",
+              "touch /var/log/app.log;\
+              chmod 777 /var/log/app.log;\
+              touch /var/log/app.log.pos;\
+              chmod 777 /var/log/app.log.pos;",
+            ]
+          volumeMounts:
+            - name: log-path
+              mountPath: "/var/log"
+      volumes:
+        - name: fluentd-cfg
+          configMap:
+            name: fluentd-cfg
+        - name: log-path
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-svc
+  namespace: fedprox
+spec:
+  selector:
+    app: flower-server
+  type: ClusterIP
+  ports:
+    - port: 30051
+      targetPort: 8080

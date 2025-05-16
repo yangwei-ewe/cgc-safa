@@ -1,0 +1,383 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: fedprox
+---
+apiVersion: v1
+data:
+  aggregator.conf: |
+    <source>
+      @type forward
+      port 24224
+      bind 0.0.0.0
+    </source>
+
+    <match relay>
+      @type stdout
+    </match>
+  relayer.conf: |
+    <source>
+      @type tail
+      tag relay
+      path /var/log/app.log
+      pos_file /var/log/app.log.pos
+      <parse>
+        @type json
+      </parse>
+    </source>
+
+    <match relay>
+      @type forward
+      <server>
+        host log-svc.fedprox
+        port 24224
+      </server>
+      <format>
+          @type json
+      </format>
+    </match>
+kind: ConfigMap
+metadata:
+  name: fluentd-cfg
+  namespace: fedprox
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ds-distributor-svc
+  namespace: fedprox
+spec:
+  ports:
+  - port: 17500
+    protocol: TCP
+    targetPort: 3000
+  selector:
+    app: ds-distributor
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: id-distributor-svc
+  namespace: fedprox
+spec:
+  ports:
+  - port: 30021
+    targetPort: 8621
+  selector:
+    app: id-distributor
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-svc
+  namespace: fedprox
+spec:
+  ports:
+  - port: 24224
+    targetPort: 24224
+  selector:
+    app: log-collector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server-svc
+  namespace: fedprox
+spec:
+  ports:
+  - port: 30051
+    targetPort: 8080
+  selector:
+    app: flower-server
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ds-distributor
+  namespace: fedprox
+spec:
+  selector:
+    matchLabels:
+      app: ds-distributor
+  template:
+    metadata:
+      labels:
+        app: ds-distributor
+    spec:
+      containers:
+      - image: registry.ican/ds_distributor:latest
+        name: ds-distributor
+        ports:
+        - containerPort: 3000
+        resources:
+          limits:
+            cpu: 500m
+            memory: 128Mi
+          requests:
+            cpu: 500m
+            memory: 128Mi
+        volumeMounts:
+        - mountPath: /data
+          name: data-path
+      initContainers:
+      - env:
+        - name: NUM_CLIENTS
+          value: "5"
+        - name: ALPHA
+          value: "0.5"
+        - name: OUTPUT_DIR
+          value: /data
+        image: registry.ican/ds_partitioner:latest
+        name: ds-partitioner
+        resources:
+          limits:
+            cpu: 4000m
+            memory: 4Gi
+          requests:
+            cpu: 2000m
+            memory: 2Gi
+        volumeMounts:
+        - mountPath: /data
+          name: data-path
+      volumes:
+      - emptyDir: {}
+        name: data-path
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: flower-client
+  name: flower-client
+  namespace: fedprox
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: flower-client
+  template:
+    metadata:
+      labels:
+        app: flower-client
+    spec:
+      containers:
+      - env:
+        - name: FLUENTD_CONF
+          value: relayer.conf
+        image: fluentd
+        name: fluentd-sidecar
+        resources:
+          limits:
+            cpu: 500m
+            memory: 500Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        volumeMounts:
+        - mountPath: /fluentd/etc/
+          name: fluentd-cfg
+          readOnly: true
+        - mountPath: /var/log
+          name: log-path
+      - command:
+        - /bin/sh
+        - -c
+        - python /app/src/client.py --cid=$(cat /var/id) --server server-svc.fedprox.svc.cluster.local
+          --port 30051 >> /var/log/app.log
+        env:
+        - name: max_tries
+          value: "120"
+        - name: period
+          value: "5"
+        image: registry.ican/kubeflower:v3.1
+        imagePullPolicy: Always
+        name: fedprox-client
+        ports:
+        - containerPort: 30051
+        resources:
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+        volumeMounts:
+        - mountPath: /var/log
+          name: log-path
+        - mountPath: /var
+          name: var-dir
+      initContainers:
+      - command:
+        - sh
+        - -c
+        - |
+          touch /var/log/app.log;
+          chmod 777 /var/log/app.log;
+          touch /var/log/app.log.pos;
+          chmod 777 /var/log/app.log.pos;
+        image: busybox
+        name: init-create-file
+        volumeMounts:
+        - mountPath: /var/log
+          name: log-path
+      - command:
+        - sh
+        - -c
+        - |
+          until wget http://id-distributor-svc:30021/get -O /var/id -q; do
+            echo "Waiting for ID service..."; sleep 2;
+          done;
+          chmod 666 /var/id
+        image: busybox
+        name: init-fetch-id
+        volumeMounts:
+        - mountPath: /var
+          name: var-dir
+      volumes:
+      - configMap:
+          name: fluentd-cfg
+        name: fluentd-cfg
+      - emptyDir: {}
+        name: log-path
+      - emptyDir: {}
+        name: var-dir
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: flower-server
+  name: flower-server
+  namespace: fedprox
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: flower-server
+  template:
+    metadata:
+      labels:
+        app: flower-server
+    spec:
+      containers:
+      - env:
+        - name: FLUENTD_CONF
+          value: relayer.conf
+        image: fluentd
+        name: fluentd-sidecar
+        resources:
+          limits:
+            cpu: 500m
+            memory: 500Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        volumeMounts:
+        - mountPath: /fluentd/etc/
+          name: fluentd-cfg
+          readOnly: true
+        - mountPath: /var/log
+          name: log-path
+      - command:
+        - /bin/sh
+        - -c
+        - python /app/src/server.py --clients 5 --min 5 --rounds 50 >> /var/log/app.log
+        image: registry.ican/kubeflower:v3.1
+        imagePullPolicy: IfNotPresent
+        name: kubeflower
+        ports:
+        - containerPort: 8080
+        resources:
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        volumeMounts:
+        - mountPath: /var/log
+          name: log-path
+      initContainers:
+      - command:
+        - sh
+        - -c
+        - touch /var/log/app.log;chmod 777 /var/log/app.log;touch /var/log/app.log.pos;chmod
+          777 /var/log/app.log.pos;
+        image: busybox
+        name: init-create-file
+        volumeMounts:
+        - mountPath: /var/log
+          name: log-path
+      volumes:
+      - configMap:
+          name: fluentd-cfg
+        name: fluentd-cfg
+      - emptyDir: {}
+        name: log-path
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: id-distributor
+  namespace: fedprox
+spec:
+  selector:
+    matchLabels:
+      app: id-distributor
+  template:
+    metadata:
+      labels:
+        app: id-distributor
+    spec:
+      containers:
+      - image: registry.ican/id_distributor:node-latest
+        imagePullPolicy: IfNotPresent
+        name: id-distributor
+        ports:
+        - containerPort: 8621
+        resources:
+          limits:
+            cpu: 500m
+            memory: 100Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-collector
+  namespace: fedprox
+spec:
+  selector:
+    matchLabels:
+      app: log-collector
+  template:
+    metadata:
+      labels:
+        app: log-collector
+    spec:
+      containers:
+      - env:
+        - name: FLUENTD_CONF
+          value: aggregator.conf
+        image: fluentd
+        name: log-collector
+        ports:
+        - containerPort: 24224
+        resources:
+          limits:
+            cpu: 500m
+            memory: 500Mi
+          requests:
+            cpu: 100m
+            memory: 100Mi
+        volumeMounts:
+        - mountPath: /fluentd/etc/
+          name: fluentd-cfg
+          readOnly: true
+      volumes:
+      - configMap:
+          name: fluentd-cfg
+        name: fluentd-cfg

@@ -1,0 +1,101 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flower-client
+  namespace: fedprox
+  labels:
+    app: flower-client
+spec:
+  replicas: 5
+  selector:
+    matchLabels:
+      app: flower-client
+  template:
+    metadata:
+      labels:
+        app: flower-client
+    spec:
+      initContainers:
+        - name: init-create-file
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              touch /var/log/app.log;
+              chmod 777 /var/log/app.log;
+              touch /var/log/app.log.pos;
+              chmod 777 /var/log/app.log.pos;
+          volumeMounts:
+            - name: log-path
+              mountPath: /var/log
+
+        - name: init-fetch-id
+          image: busybox
+          command:
+            - sh
+            - -c
+            - |
+              until wget http://id-distributor-svc:30021/get -O /var/id -q; do
+                echo "Waiting for ID service..."; sleep 2;
+              done;
+              chmod 666 /var/id
+          volumeMounts:
+            - name: var-dir
+              mountPath: /var
+
+      containers:
+        - name: fluentd-sidecar
+          image: fluentd
+          resources:
+            requests:
+              memory: "100Mi"
+              cpu: "100m"
+            limits:
+              memory: "500Mi"
+              cpu: "500m"
+          env:
+            - name: FLUENTD_CONF
+              value: "relayer.conf"
+          volumeMounts:
+            - name: fluentd-cfg
+              mountPath: "/fluentd/etc/"
+              readOnly: true
+            - name: log-path
+              mountPath: "/var/log"
+
+        - name: fedprox-client
+          image: registry.ican/kubeflower:v3.1
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "1Gi"
+            limits:
+              cpu: "2000m"
+              memory: "2Gi"
+          env:
+            - name: max_tries
+              value: "120"
+            - name: period
+              value: "5"
+          command:
+            - /bin/sh
+            - -c
+            - python /app/src/client.py --cid=$(cat /var/id) --server server-svc.fedprox.svc.cluster.local --port 30051 >> /var/log/app.log
+          ports:
+            - containerPort: 30051
+          volumeMounts:
+            - name: log-path
+              mountPath: "/var/log"
+            - name: var-dir
+              mountPath: /var
+
+      volumes:
+        - name: fluentd-cfg
+          configMap:
+            name: fluentd-cfg
+        - name: log-path
+          emptyDir: {}
+        - name: var-dir
+          emptyDir: {}

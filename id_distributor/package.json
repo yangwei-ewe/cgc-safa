@@ -1,0 +1,19 @@
+{
+  "name": "id-distributor",
+  "version": "1.0.0",
+  "description": "",
+  "type": "module",
+  "main": "src/id_distributor.js",
+  "scripts": {
+    "start": "node src/id_distributor.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^2.2.0",
+    "cors": "^2.8.5",
+    "express": "^5.1.0"
+  }
+}

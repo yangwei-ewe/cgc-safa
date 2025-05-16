@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-collector
+  namespace: fluentd-test
+spec:
+  selector:
+    matchLabels:
+      app: log-collector
+  template:
+    metadata:
+      labels:
+        app: log-collector
+    spec:
+      containers:
+        - name: log-collector
+          image: fluentd
+          resources:
+            requests:
+              memory: "100Mi"
+              cpu: "100m"
+            limits:
+              memory: "500Mi"
+              cpu: "500m"
+          env:
+            - name: FLUENTD_CONF
+              value: "aggregator.conf"
+          volumeMounts:
+            - name: fluentd-cfg
+              mountPath: "/fluentd/etc/"
+              readOnly: true
+          ports:
+            - containerPort: 24224
+      volumes:
+        - name: fluentd-cfg
+          configMap:
+            name: fluentd-cfg
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: log-svc
+  namespace: fluentd-test
+spec:
+  selector:
+    app: log-collector
+  ports:
+    - port: 24224
+      targetPort: 24224

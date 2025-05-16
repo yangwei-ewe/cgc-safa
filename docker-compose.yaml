@@ -1,0 +1,35 @@
+version: "3.8"
+
+services:
+  id-distributor:
+    container_name: id-distributor
+    image: registry.ican/id_distributor:node-latest
+    ports:
+      - "8621:8621"
+
+  partitioner:
+    build:
+      context: ./dataset_partitioner
+      dockerfile: ds_partitioner.dockerfile
+    volumes:
+      - ./data:/data
+    environment:
+      NUM_CLIENTS: "10"
+      ALPHA:      "0.5"
+      OUTPUT_DIR: "/data"
+    restart: "no"
+
+  ds-distributor:
+    build:
+      context: ./dataset_partitioner
+      dockerfile: ds_distributor.dockerfile
+    volumes:
+      - ./data:/data
+    environment:
+      DATA_DIR: "/data"
+      PORT:     "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - partitioner
+    restart: always

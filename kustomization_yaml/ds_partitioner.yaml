@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ds-distributor
+spec:
+  selector:
+    matchLabels:
+      app: ds-distributor
+  template:
+    metadata:
+      labels:
+        app: ds-distributor
+    spec:
+      containers:
+        - name: ds-distributor
+          image: registry.ican/ds_distributor:latest
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "500m"
+            limits:
+              memory: "128Mi"
+              cpu: "500m"
+          ports:
+            - containerPort: 3000
+          volumeMounts:
+            - name: data-path
+              mountPath: "/data"
+      initContainers:
+        - name: ds-partitioner
+          image: registry.ican/ds_partitioner:latest
+          resources:
+            requests:
+              cpu: 4000m
+              memory: 4Gi
+            limits:
+              cpu: 8000m
+              memory: 6Gi
+          env:
+            - name: NUM_CLIENTS
+              value: "5"
+            - name: ALPHA
+              value: "0.5"
+            - name: OUTPUT_DIR
+              value: "/data"
+          volumeMounts:
+            - name: data-path
+              mountPath: "/data"
+      volumes:
+        - name: data-path
+          emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ds-distributor-svc
+spec:
+  selector:
+    app: ds-distributor
+  ports:
+    - protocol: TCP
+      port: 17500
+      targetPort: 3000

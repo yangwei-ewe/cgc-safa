@@ -1,0 +1,80 @@
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: fluentd-cfg
+  namespace: ns-name
+data:
+  relayer.conf: |
+    <source>
+      @type tail
+      tag relay
+      path /var/log/app.log
+      pos_file /var/log/app.log.pos
+      <parse>
+        @type json
+      </parse>
+    </source>
+
+    <match relay>
+      @type forward
+      <server>
+        host log-svc.fedprox
+        port 24224
+      </server>
+      <format>
+          @type json
+      </format>
+    </match>
+
+  aggregator.conf: |
+    <source>
+      @type forward
+      port 24224
+      bind 0.0.0.0
+    </source>
+
+    <match relay>
+      @type stdout
+    </match>
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: id-distributor
+  namespace: fluentd-test
+spec:
+  selector:
+    matchLabels:
+      app: id-distributor
+  template:
+    metadata:
+      labels:
+        app: id-distributor
+    spec:
+      containers:
+        - name: id-distributor
+          image: registry.ican/id_distributor:node-latest
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              memory: "100Mi"
+              cpu: "100m"
+            limits:
+              memory: "100Mi"
+              cpu: "500m"
+          ports:
+            - containerPort: 8621
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: id-distributor-svc
+  namespace: fluentd-test
+spec:
+  selector:
+    app: id-distributor
+  ports:
+    - port: 30021
+      targetPort: 8621
